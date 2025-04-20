@@ -35,13 +35,13 @@ def data_loader(args):
         if args.display:
             plt.show()
 
-        I = Image_Remap(I, 0, 1, -1, 1)
-        ## Display
-        fig, ax = plt.subplots()
-        ax.imshow(I, cmap='gray', origin='lower')
-        ax.set_title('Calibration Plate')
-        if args.display:
-            plt.show()
+        # I = Image_Remap(I, 0, 1, -1, 1)
+        # ## Display
+        # fig, ax = plt.subplots()
+        # ax.imshow(I, cmap='gray', origin='lower')
+        # ax.set_title('Calibration Plate')
+        # if args.display:
+        #     plt.show()
 
     return I
 
@@ -52,80 +52,32 @@ def load_kernel(args, ker_num, ker_type, Im_size):
         kernel: the 2D kernel matrix.
     """
 
-    print("Use " + args.kernel + " kernel")
     N = int(np.ceil(0.05*Im_size))
     if N % 2 == 0:
         N = N + 1
     mid = int(np.ceil(N/2))
-    fif = int(np.ceil(N/5))
 
     if ker_type == 0:
         # white: 1, black: 0
         kernel = np.ones((N, N)) * -1
-        # red: bottom left of white square
-        if ker_num == 0:
-            kernel[0:mid, 0:mid] = 1
-        # green: top right of white square
-        elif ker_num == 1:
-            kernel[mid-1:N+1, mid-1:N+1] = 1
-        # blue: bottom left of white square
-        elif ker_num == 2:
-            kernel[0:mid, mid:N+1] = 1
-        # yellow: top left of white square
-        elif ker_num == 3:
-            kernel[mid:N+1, 0:mid] = 1
-    elif ker_type == 1:
-        # white: 1, black: 0
-        kernel = np.ones((N, N)) * -1
         # red:
         if ker_num == 0:
+            print("Use positive diagonal corner detection kernel")
             kernel[0:mid, 0:mid] = 1
             kernel[mid - 1:N + 1, mid - 1:N + 1] = 1
         # green:
         elif ker_num == 1:
-            kernel[0:mid, mid-1:N+1] = 1
-            kernel[mid - 1:N + 1, 0:mid] = 1
-        # blue:
-        elif ker_num == 2:
-            kernel[0:4, 0:4] = 1
-            kernel[4:15, 4:15] = 1
-        # yellow:
-        elif ker_num == 3:
-            kernel[mid-1:N+1, 0:mid] = 1
-    elif ker_type == 2:
-        # white: 1, black: 0
-        kernel = np.ones((N, N))
-        # red: bottom left of white square
-        if ker_num == 0:
-            kernel[0:mid, 0:mid] = 0
-        # green: top right of white square
-        elif ker_num == 1:
-            kernel[mid-1:N+1, mid-1:N+1] = 0
-        # blue: bottom left of white square
-        elif ker_num == 2:
-            kernel[0:mid, mid:N+1] = 0
-        # yellow: top left of white square
-        elif ker_num == 3:
-            kernel[mid:N+1, 0:mid] = 0
-    elif ker_type == 3:
-        # white: 1, black: 0
-        kernel = np.ones((N, N)) * -1
-        # red:
-        if ker_num == 0:
-            kernel[0:mid, 0:mid] = 1
-            kernel[mid - 1:N + 1, mid - 1:N + 1] = 1
-        # green:
-        elif ker_num == 1:
+            print("Use negative diagonal corner detection kernel")
             kernel[0:mid, mid - 1:N + 1] = 1
             kernel[mid - 1:N + 1, 0:mid] = 1
         # blue:
         elif ker_num == 2:
-            kernel[0:N-2, 2:N+1] = 1
-        # yellow:
-        elif ker_num == 3:
-            kernel = np.ones((N, N))
+            print("Use origin detection kernel")
+            m = int(np.floor(1/15 * N))
+            kernel[0:5*m, :] = 1
+            kernel[7*m:N, 0:8*m] = 1
+            kernel[9*m:N, 10*m:N] = 1
 
-    # kernel = kernel / np.sum(kernel)
     ## Display
     fig, ax = plt.subplots()
     ax.imshow(kernel, cmap='gray', origin='lower')
@@ -176,17 +128,18 @@ def Image_Remap(I, old_min, old_max, new_min, new_max):
 def main(args):
 
     ## Load and display calibration grid and convolution kernels
+    ## Detect corners and find origin
     if int(args.current_step) >= 1:
         print("Load image")
         I = data_loader(args)
         corners = np.zeros(I.shape)
-        for k in range(2,3):
-            kernel = load_kernel(args, k, 3, I.shape[0])
+        for k in range(3):
+            kernel = load_kernel(args, k, 0, I.shape[0])
             conv = Convolution(args, I, kernel)
             conv = conv / np.max(conv)
             for i in range(conv.shape[0]):
                 for j in range(conv.shape[1]):
-                    if np.average(conv[i, j, :]) >= 0.85:
+                    if np.average(conv[i, j, :]) >= args.detection_threshold:
                         if k == 0:
                             # pass
                             corners[i, j] = [1, 0, 0]
@@ -198,9 +151,8 @@ def main(args):
                             corners[i, j] = [0, 0, 1]
                             I[i, j] = [0, 0, 1]
                         elif k == 3:
-                            pass
-                            # corners[i, j] = [1, 1, 0]
-                            # I[i, j] = [1, 1, 0]
+                            corners[i, j] = [1, 0, 1]
+                            I[i, j] = [1, 0, 1]
                     # else:
                     #     corners[i, j] = [0, 0, 0]
 
@@ -209,14 +161,6 @@ def main(args):
             ax.set_title('Corner detection')
             if args.display:
                 plt.show()
-        ## Display
-        # fig, ax = plt.subplots()
-        # ax.imshow(conv, cmap='gray', origin='lower')
-        # ax.set_title('Convolution')
-        # if args.display:
-        #     plt.show()
-
-
 
         fig, ax = plt.subplots()
         ax.imshow(I, cmap='gray', origin='lower')
@@ -224,6 +168,9 @@ def main(args):
         if args.display:
             plt.show()
 
+    ## Define coordinate system
+    if int(args.current_step) >= 2:
+        pass
 
 
 
@@ -233,6 +180,7 @@ if __name__ == '__main__':
     parser.add_argument('--data', default="none", type=str)
     parser.add_argument('--kernel', default="binomial", type=str)
     parser.add_argument('--scale', default=3, type=int)
+    parser.add_argument('--detection_threshold', default=0.95, type=float)
     parser.add_argument('--display', action='store_true', default=False)
     parser.add_argument('--save', action='store_true', default=False)
     parser.add_argument('--current_step', default=1, type=int)
