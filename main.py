@@ -9,7 +9,7 @@ from mpl_toolkits.mplot3d import Axes3D
 import matplotlib as mpl
 
 
-def data_loader(args):
+def calibration_loader(args):
     """
     Output:
         I: the image matrix of size N-by-M-by-3.
@@ -19,10 +19,10 @@ def data_loader(args):
             The third dimension is color channels, from Red to Green to Blue.
     """
 
-    if args.data in ["base", "base2", "base3", "base7", "base5", "lighthouse"]:
-        print("Using " + args.data + " photo")
+    if args.calibration in ["base", "base2", "base3", "base7", "base5", "test_case_2", "test_case_1", "lighthouse"]:
+        print("Using " + args.calibration + " photo")
         current_dir = os.getcwd()
-        image_path = osp.join(current_dir, 'Calibration', args.data + '.png')
+        image_path = osp.join(current_dir, 'Calibration', args.calibration + '.png')
         I = np.asarray(Image.open(image_path)).astype(np.float64)/255
         I = np.transpose(I, (1, 0, 2))
         I = I[:, ::-1, 0:3]
@@ -35,13 +35,33 @@ def data_loader(args):
         if args.display:
             plt.show()
 
-        # I = Image_Remap(I, 0, 1, -1, 1)
-        # ## Display
-        # fig, ax = plt.subplots()
-        # ax.imshow(I, cmap='gray', origin='lower')
-        # ax.set_title('Calibration Plate')
-        # if args.display:
-        #     plt.show()
+    return I
+
+def curve_loader(args):
+    """
+    Output:
+        I: the image matrix of size N-by-M-by-3.
+            The pixel values are within [0, 1].
+            The first dimension is horizontal, left-right (N pixels).
+            The second dimension is vertical, bottom-up (M pixels).
+            The third dimension is color channels, from Red to Green to Blue.
+    """
+
+    if args.curve in ["line1", "line2", "line3", "test_case_2", "test_case_1"]:
+        print("Using " + args.curve + " photo")
+        current_dir = os.getcwd()
+        image_path = osp.join(current_dir, 'Curves', args.curve + '.png')
+        I = np.asarray(Image.open(image_path)).astype(np.float64)/255
+        I = np.transpose(I, (1, 0, 2))
+        I = I[:, ::-1, 0:3]
+        I = np.transpose(I, (1, 0, 2))
+
+        ## Display
+        fig, ax = plt.subplots()
+        ax.imshow(I, cmap='gray', origin='lower')
+        ax.set_title('Captured Curve')
+        if args.display:
+            plt.show()
 
     return I
 
@@ -131,7 +151,7 @@ def main(args):
     ## Detect corners and find origin
     if int(args.current_step) >= 1:
         print("Load image")
-        I = data_loader(args)
+        I = calibration_loader(args)
         corners = np.zeros(I.shape)
         for k in range(3):
             kernel = load_kernel(args, k, 0, I.shape[0])
@@ -170,14 +190,121 @@ def main(args):
 
     ## Define coordinate system
     if int(args.current_step) >= 2:
-        pass
+        N = I.shape[0]
+        M = I.shape[1]
+        off = 5
+
+        # green detects starting point
+        x1 = 0
+        y1 = 0
+        detected = False
+        for n in range(N):
+            for m in range(M):
+                if I[n, m, 0] == 0 and I[n, m, 1] == 1 and I[n, m, 2] == 0 and not detected:
+                    I[n, m] = [1, 0, 1]
+                    detected = True
+                    x1 = n
+                    y1 = m
+
+        # red detects ending point
+        x2 = x1
+        y2 = y1
+        xdist = I.shape[0]
+        for n in range(N):
+            for m in range(y1 + off, M):
+                if I[n, m, 0] == 1 and I[n, m, 1] == 0 and I[n, m, 2] == 0:
+                    if np.sqrt(pow((n-x1), 2) + pow((m-y1), 2)) < xdist:
+                        x2 = n
+                        y2 = m
+                        xdist = np.sqrt(pow((x1-x2), 2) + pow((y1-y2), 2))
+        I[x2, y2] = [0, 1, 1]
+        x3 = x1
+        y3 = y1
+        ydist = I.shape[1]
+        for m in range(M):
+            for n in range(x1 + off, N):
+                if I[n, m, 0] == 1 and I[n, m, 1] == 0 and I[n, m, 2] == 0:
+                    if np.sqrt(pow((n-x1), 2) + pow((m-y1), 2)) < ydist:
+                        x3 = n
+                        y3 = m
+                        ydist = np.sqrt(pow((x1-x3), 2) + pow((y1-y3), 2))
+        I[x3, y3] = [0, 1, 1]
+
+        # blue detects origin
+        xo = 0
+        yo = 0
+        detected = False
+        for n in range(N):
+            for m in range(M):
+                if I[n, m, 0] == 0 and I[n, m, 1] == 0 and I[n, m, 2] == 1 and not detected:
+                    I[n, m] = [1, 1, 0]
+                    detected = True
+                    xo = n
+                    yo = m
+
+
+        fig, ax = plt.subplots()
+        ax.imshow(I, cmap='gray', origin='lower')
+        ax.set_title('Corner Detection for Basis Calculation')
+        if args.display:
+            plt.show()
+
+    ## Curve fitting
+    ## THIS IS WHERE NEURAL NETWORK WOULD BE
+    if int(args.current_step) >= 3 or int(args.current_step) == 0:
+        curve = curve_loader(args)
+        # linear least squares regression
+        A = []
+        b = []
+        for i in range(curve.shape[0]):
+            for j in range(curve.shape[1]):
+                if curve[i, j, 1] == 0:
+                    A.append([j, 1])
+                    b.append(i)
+        A = np.array(A)
+        b = np.array(b)
+        alpha = np.linalg.lstsq(A, b, rcond=None)[0]
+        print(alpha)
+
+        x = np.linspace(0, curve.shape[1], curve.shape[1])
+        y = alpha[0]*x + alpha[1]
+        fig, ax = plt.subplots()
+        plt.plot(x,y)
+        ax.imshow(curve, cmap='gray', origin='lower')
+        ax.set_title('Calculated Curve Fit Over Captured Curve')
+        if args.display:
+            plt.show()
+
+    ## Projection
+    if int(args.current_step) >= 4:
+        x = []
+        y = []
+        for i in range(curve.shape[0]):
+            for j in range(curve.shape[1]):
+                if curve[i, j, 1] == 0:
+                    x.append((i - xo)*10/xdist)
+                    y.append((j - yo)*10/ydist)
+                    I[i, j] = [1, 0, 1]
+        x = np.array(x)
+        y = np.array(y)
+        print(x)
+        print(y)
+        fig, ax = plt.subplots()
+        ax.imshow(I, cmap='gray', origin='lower')
+        ax.set_title('Corner Detection for Basis Calculation')
+        if args.display:
+            plt.show()
+
+
+        k = 0
 
 
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description="Convolution_and_Fourier_and_Filter")
     parser.add_argument('--path', default="data", type=str)
-    parser.add_argument('--data', default="none", type=str)
+    parser.add_argument('--calibration', default="none", type=str)
+    parser.add_argument('--curve', default="none", type=str)
     parser.add_argument('--kernel', default="binomial", type=str)
     parser.add_argument('--scale', default=3, type=int)
     parser.add_argument('--detection_threshold', default=0.95, type=float)
