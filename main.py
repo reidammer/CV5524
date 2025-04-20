@@ -2,7 +2,7 @@ import argparse
 import os
 import os.path as osp
 import numpy as np
-from PIL import Image
+from PIL import Image, ImageOps
 import matplotlib.pyplot as plt
 import matplotlib.image as mpimg
 from mpl_toolkits.mplot3d import Axes3D
@@ -19,7 +19,7 @@ def data_loader(args):
             The third dimension is color channels, from Red to Green to Blue.
     """
 
-    if args.data in ["base2", "lighthouse"]:
+    if args.data in ["base", "base2", "base3", "base7", "base5", "lighthouse"]:
         print("Using " + args.data + " photo")
         current_dir = os.getcwd()
         image_path = osp.join(current_dir, 'Calibration', args.data + '.png')
@@ -35,38 +35,103 @@ def data_loader(args):
         if args.display:
             plt.show()
 
+        I = Image_Remap(I, 0, 1, -1, 1)
+        ## Display
+        fig, ax = plt.subplots()
+        ax.imshow(I, cmap='gray', origin='lower')
+        ax.set_title('Calibration Plate')
+        if args.display:
+            plt.show()
+
     return I
 
 
-def load_kernel(args, ker_num):
+def load_kernel(args, ker_num, ker_type, Im_size):
     """
     Output:
         kernel: the 2D kernel matrix.
     """
 
     print("Use " + args.kernel + " kernel")
+    N = int(np.ceil(0.05*Im_size))
+    if N % 2 == 0:
+        N = N + 1
+    mid = int(np.ceil(N/2))
+    fif = int(np.ceil(N/5))
 
-    # find bottom left corner of black squares
-    # if args.kernel == "bot_left":
-    if ker_num == 0:
+    if ker_type == 0:
         # white: 1, black: 0
-        kernel = np.ones((11, 11))
-        kernel[0:6, 0:6] = 0
-    # find bottom left corner of white squares
-    elif ker_num == 1:
-        kernel = np.zeros((11, 11))
-        kernel[0:6, 0:6] = 1
-    # find top right corner of white squares
-    elif ker_num == 2:
-        kernel = np.zeros((11, 11))
-        kernel[6:11, 6:11] = 1
+        kernel = np.ones((N, N)) * -1
+        # red: bottom left of white square
+        if ker_num == 0:
+            kernel[0:mid, 0:mid] = 1
+        # green: top right of white square
+        elif ker_num == 1:
+            kernel[mid-1:N+1, mid-1:N+1] = 1
+        # blue: bottom left of white square
+        elif ker_num == 2:
+            kernel[0:mid, mid:N+1] = 1
+        # yellow: top left of white square
+        elif ker_num == 3:
+            kernel[mid:N+1, 0:mid] = 1
+    elif ker_type == 1:
+        # white: 1, black: 0
+        kernel = np.ones((N, N)) * -1
+        # red:
+        if ker_num == 0:
+            kernel[0:mid, 0:mid] = 1
+            kernel[mid - 1:N + 1, mid - 1:N + 1] = 1
+        # green:
+        elif ker_num == 1:
+            kernel[0:mid, mid-1:N+1] = 1
+            kernel[mid - 1:N + 1, 0:mid] = 1
+        # blue:
+        elif ker_num == 2:
+            kernel[0:4, 0:4] = 1
+            kernel[4:15, 4:15] = 1
+        # yellow:
+        elif ker_num == 3:
+            kernel[mid-1:N+1, 0:mid] = 1
+    elif ker_type == 2:
+        # white: 1, black: 0
+        kernel = np.ones((N, N))
+        # red: bottom left of white square
+        if ker_num == 0:
+            kernel[0:mid, 0:mid] = 0
+        # green: top right of white square
+        elif ker_num == 1:
+            kernel[mid-1:N+1, mid-1:N+1] = 0
+        # blue: bottom left of white square
+        elif ker_num == 2:
+            kernel[0:mid, mid:N+1] = 0
+        # yellow: top left of white square
+        elif ker_num == 3:
+            kernel[mid:N+1, 0:mid] = 0
+    elif ker_type == 3:
+        # white: 1, black: 0
+        kernel = np.ones((N, N)) * -1
+        # red:
+        if ker_num == 0:
+            kernel[0:mid, 0:mid] = 1
+            kernel[mid - 1:N + 1, mid - 1:N + 1] = 1
+        # green:
+        elif ker_num == 1:
+            kernel[0:mid, mid - 1:N + 1] = 1
+            kernel[mid - 1:N + 1, 0:mid] = 1
+        # blue:
+        elif ker_num == 2:
+            kernel[0:N-2, 2:N+1] = 1
+        # yellow:
+        elif ker_num == 3:
+            kernel = np.ones((N, N))
 
-        ## Display
-        fig, ax = plt.subplots()
-        ax.imshow(kernel, cmap='gray', origin='lower')
-        ax.set_title('Convolution Kernel')
-        if args.display:
-            plt.show()
+    # kernel = kernel / np.sum(kernel)
+    ## Display
+    fig, ax = plt.subplots()
+    ax.imshow(kernel, cmap='gray', origin='lower')
+    ax.set_title('Convolution Kernel')
+    if args.display:
+        plt.show()
 
     return kernel
 
@@ -99,7 +164,13 @@ def Convolution(args, I, kernel):
     return I_out
 
 
+def Image_Remap(I, old_min, old_max, new_min, new_max):
+    for c in range(I.shape[2]):
+        for n in range(I.shape[0]):
+            for m in range(I.shape[1]):
+                I[n, m, c] = (I[n, m, c] - old_min) / (old_max - old_min) * (new_max - new_min) + new_min
 
+    return I
 
 
 def main(args):
@@ -108,26 +179,36 @@ def main(args):
     if int(args.current_step) >= 1:
         print("Load image")
         I = data_loader(args)
-        corners = data_loader(args)
-        for k in range(3):
-            kernel = load_kernel(args, k)
+        corners = np.zeros(I.shape)
+        for k in range(2,3):
+            kernel = load_kernel(args, k, 3, I.shape[0])
             conv = Convolution(args, I, kernel)
             conv = conv / np.max(conv)
             for i in range(conv.shape[0]):
                 for j in range(conv.shape[1]):
-                    if np.average(conv[i, j, :]) >= 0.84:
+                    if np.average(conv[i, j, :]) >= 0.85:
                         if k == 0:
+                            # pass
                             corners[i, j] = [1, 0, 0]
                             I[i, j] = [1, 0, 0]
                         elif k == 1:
                             corners[i, j] = [0, 1, 0]
                             I[i, j] = [0, 1, 0]
-                        else:
+                        elif k == 2:
                             corners[i, j] = [0, 0, 1]
                             I[i, j] = [0, 0, 1]
-                    else:
-                        corners[i, j] = [0, 0, 0]
+                        elif k == 3:
+                            pass
+                            # corners[i, j] = [1, 1, 0]
+                            # I[i, j] = [1, 1, 0]
+                    # else:
+                    #     corners[i, j] = [0, 0, 0]
 
+            fig, ax = plt.subplots()
+            ax.imshow(corners, cmap='gray', origin='lower')
+            ax.set_title('Corner detection')
+            if args.display:
+                plt.show()
         ## Display
         # fig, ax = plt.subplots()
         # ax.imshow(conv, cmap='gray', origin='lower')
@@ -135,11 +216,7 @@ def main(args):
         # if args.display:
         #     plt.show()
 
-        fig, ax = plt.subplots()
-        ax.imshow(corners, cmap='gray', origin='lower')
-        ax.set_title('Corner detection')
-        if args.display:
-            plt.show()
+
 
         fig, ax = plt.subplots()
         ax.imshow(I, cmap='gray', origin='lower')
