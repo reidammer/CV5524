@@ -8,9 +8,12 @@ from PIL import Image, ImageOps
 import matplotlib.pyplot as plt
 import matplotlib.image as mpimg
 from mpl_toolkits.mplot3d import Axes3D
+import torch.optim as optim
 import matplotlib as mpl
 import torch
 import torch.nn as nn
+from torch.utils.data import DataLoader, random_split
+import torchvision.models as models
 import torch.nn.functional as F
 from torch.nn import init
 from torch.nn import Parameter
@@ -20,7 +23,7 @@ import os
 import random
 import time
 import math
-from matplotlib.path import Path
+from pathlib import Path
 from torch.utils.data import Dataset
 from torchvision import transforms
 from PIL import Image
@@ -209,48 +212,175 @@ def Image_Remap(I, old_min, old_max, new_min, new_max):
     return I
 
 
-class CurveFittingNetwork(nn.Module):
-    def __init__(self, input_dim=1, hidden_dims=[64, 32], output_dim=1):
-        super(CurveFittingNetwork, self).__init__()
+def train_model(model, train_loader, val_loader, num_epochs=25, use_curve_loss=True):
+    """Train the model and monitor validation performance"""
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    print(f"Using device: {device}")
 
-        layers = []
-        prev_dim = input_dim
+    model = model.to(device)
+    optimizer = optim.Adam(model.parameters(), lr=0.001)
+    scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, "min", patience=3)
 
-        # Create hidden layers
-        for hidden_dim in hidden_dims:
-            layers.append(nn.Linear(prev_dim, hidden_dim))
-            layers.append(nn.ReLU())
-            prev_dim = hidden_dim
+    train_losses = []
+    val_losses = []
 
-        # Output layer
-        layers.append(nn.Linear(prev_dim, output_dim))
+    for epoch in range(num_epochs):
+        # Training phase
+        model.train()
+        running_loss = 0.0
 
-        self.model = nn.Sequential(*layers)
+        for images, labels in train_loader:
+            images = images.to(device)
+            labels = labels.to(device)
+
+            optimizer.zero_grad()
+
+            # run images through model
+            outputs = model(images)
+
+            # calculate loss
+            batch_loss = F.mse_loss(outputs, labels)
+
+            batch_loss.backward()
+            optimizer.step()
+
+            running_loss += batch_loss.item()
+
+        epoch_train_loss = running_loss / len(train_loader)
+        train_losses.append(epoch_train_loss)
+
+        model.eval()
+        running_val_loss = 0.0
+
+        # Validation, turn off gradients
+        with torch.no_grad():
+            for images, labels in val_loader:
+                images = images.to(device)
+                labels = labels.to(device)
+
+                outputs = model(images)
+
+                # MSE loss between curve coefficients
+                batch_loss = F.mse_loss(outputs, labels)
+
+                running_val_loss += batch_loss.item()
+
+        epoch_val_loss = running_val_loss / len(val_loader)
+        val_losses.append(epoch_val_loss)
+
+        scheduler.step(epoch_val_loss)
+
+        print(
+            f"Epoch {epoch+1}/{num_epochs}, "
+            f"Train Loss: {epoch_train_loss:.4f}, "
+            f"Val Loss: {epoch_val_loss:.4f}"
+        )
+
+    return model, train_losses, val_losses
+
+
+def test_model(model, test_loader, use_curve_loss=True):
+    """Evaluate the model on the test set"""
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    model = model.to(device)
+    model.eval()
+
+    running_loss = 0.0
+
+    # Test model, turn off gradients
+    with torch.no_grad():
+        for images, labels in test_loader:
+            images = images.to(device)
+            labels = labels.to(device)
+
+            outputs = model(images)
+
+            # MSE loss between curve coefficients
+            batch_loss = F.mse_loss(outputs, labels)
+
+            running_loss += batch_loss.item()
+
+    test_loss = running_loss / len(test_loader)
+    print(f"Test Loss: {test_loss:.4f}")
+
+    return test_loss
+
+
+def plot_curve_from_coeffs(ax, coeffs, x_range=(-10, 10), num_points=100):
+    """Plot a curve on the given axis based on coefficients and curve type"""
+    x = np.linspace(x_range[0], x_range[1], num_points)
+
+    # Only linear curve for now
+    y = coeffs[0] * x + coeffs[1]
+
+    ax.plot(x, y)
+    return x, y
+
+
+def visualize_predictions(model, test_loader, num_examples=5):
+    """Visualize model predictions against ground truth for some test examples"""
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    model = model.to(device)
+    model.eval()
+
+    fig, axes = plt.subplots(num_examples, 2, figsize=(12, 4 * num_examples))
+
+    examples_seen = 0
+    # Test examples
+    with torch.no_grad():
+        for images, labels in test_loader:
+            if examples_seen >= num_examples:
+                break
+
+            images = images.to(device)
+            labels = labels.to(device)
+
+            outputs = model(images)
+
+            for i in range(min(len(images), num_examples - examples_seen)):
+                ax1 = axes[examples_seen, 1]
+
+                # Plot the predicted and ground truth curves
+                true_coeffs = labels[i].cpu().numpy()
+                pred_coeffs = outputs[i].cpu().numpy()
+
+                # Get coefficients for curves
+                true_coeffs = true_coeffs[:2]
+                pred_coeffs = pred_coeffs[:2]
+
+                # Plot curves to compare
+                plot_curve_from_coeffs(ax1, true_coeffs, x_range=(-5, 5))
+                plot_curve_from_coeffs(ax1, pred_coeffs, x_range=(-5, 5))
+                ax1.legend(["Ground Truth", "Prediction"])
+                ax1.set_title(f"Curve Fitting Results")
+
+                examples_seen += 1
+
+    plt.tight_layout()
+    plt.show()
+
+
+class CurveCoefficientCNN(nn.Module):
+    def __init__(self, num_coefficients=2):
+        super(CurveCoefficientCNN, self).__init__()
+
+        # Use a pre-trained CNN as the backbone
+        self.backbone = models.resnet18(pretrained=True)
+
+        # Replace the final FC layer with one for coefficient regression
+        in_features = self.backbone.fc.in_features
+        self.backbone.fc = nn.Linear(in_features, num_coefficients)
 
     def forward(self, x):
-        return self.model(x)
+        return self.backbone(x)
+
+
+def generate_curve(x, coeffs):
+    return x * coeffs[0] + coeffs[1]  # Example for linear curve
 
 
 def main(args):
 
-    # with open("./curve_projection_dataset/metadata.json", "r") as f:
-    #     metadata = json.load(f)
-
-    # curve_data = metadata["curves"]
-
-    # dataset = CurveDataset(metadata, "./curve_projection_dataset")
-    # train_size = int(0.8 * len(dataset))
-    # test_size = len(dataset) - train_size
-    # train_dataset, test_dataset = torch.utils.data.random_split(
-    #     dataset, [train_size, test_size]
-    # )
-    # train_loader = torch.utils.data.DataLoader(
-    #     train_dataset, batch_size=32, shuffle=True
-    # )
-    # test_loader = torch.utils.data.DataLoader(
-    #     test_dataset, batch_size=32, shuffle=False
-    # )
-    ## Load and display calibration grid and convolution kernels
     ## Detect corners and find origin
     if int(args.current_step) >= 1:
         print("Load image")
@@ -363,69 +493,57 @@ def main(args):
 
     ## Curve fitting
     ## THIS IS WHERE NEURAL NETWORK WOULD BE
+    with open("./curve_projection_dataset/metadata.json", "r") as f:
+        metadata = json.load(f)
 
-    curves_dir = os.path.join("curve_projection_dataset", "curves")
+    # Create dataset
+    dataset = CurveDataset(metadata, "./curve_projection_dataset")
+
+    # Split dataset 70 15 15
+    train_size = int(0.7 * len(dataset))
+    val_size = int(0.15 * len(dataset))
+    test_size = len(dataset) - train_size - val_size
+
+    train_dataset, val_dataset, test_dataset = random_split(
+        dataset,
+        [train_size, val_size, test_size],
+        generator=torch.Generator().manual_seed(42),
+    )
+
+    # Create data loaders
+    train_loader = DataLoader(train_dataset, batch_size=32, shuffle=True)
+    val_loader = DataLoader(val_dataset, batch_size=32, shuffle=False)
+    test_loader = DataLoader(test_dataset, batch_size=32, shuffle=False)
 
     if int(args.current_step) >= 3 or int(args.current_step) == 0:
+        # Initialize model
+        model = CurveCoefficientCNN(num_coefficients=2)
 
-        for curve_file in os.listdir(curves_dir):
+        # Train model
+        trained_model, train_losses, val_losses = train_model(
+            model, train_loader, val_loader, num_epochs=20, use_curve_loss=True
+        )
 
-            curve_path = os.path.join(curves_dir, curve_file)
-            print(f"Processing curve: {curve_file}")
+        # Plot training and validation loss curves
+        plt.figure(figsize=(10, 6))
+        plt.plot(train_losses, label="Training Loss")
+        plt.plot(val_losses, label="Validation Loss")
+        plt.xlabel("Epoch")
+        plt.ylabel("Loss")
+        plt.title("Training and Validation Loss")
+        plt.legend()
+        plt.show()
 
-            # Load the curve image
-            curve = np.asarray(Image.open(curve_path)).astype(np.float64) / 255
-            curve = np.transpose(curve, (1, 0, 2))
-            curve = curve[:, ::-1, 0:3]
-            curve = np.transpose(curve, (1, 0, 2))
+        # Test model
+        test_loss = test_model(trained_model, test_loader, use_curve_loss=True)
 
-            # linear least squares regression
-            A = []
-            b = []
-            for i in range(curve.shape[0]):
-                for j in range(curve.shape[1]):
-                    if (
-                        curve[i, j, 0] == 1
-                        and curve[i, j, 1] == 0
-                        and curve[i, j, 2] == 0
-                    ):  # Red curve
-                        A.append([j, 1])
-                        b.append(i)
-            A = np.array(A)
-            b = np.array(b)
-            alpha = np.linalg.lstsq(A, b, rcond=None)[0]
-            print(alpha)
+        # Visualize results
+        visualize_predictions(trained_model, test_loader, num_examples=5)
 
-            x = np.linspace(0, curve.shape[1], curve.shape[1])
-            y = alpha[0] * x + alpha[1]
-            fig, ax = plt.subplots()
-            plt.plot(x, y)
-            ax.imshow(curve, cmap="gray", origin="lower")
-            ax.set_title("Calculated Curve Fit Over Captured Curve")
-            if args.display:
-                plt.show()
-
-    ## Projection
-    if int(args.current_step) >= 4:
-        x = []
-        y = []
-        for i in range(curve.shape[0]):
-            for j in range(curve.shape[1]):
-                if curve[i, j, 1] == 0:
-                    x.append((i - xo) * 10 / xdist)
-                    y.append((j - yo) * 10 / ydist)
-                    I[i, j] = [1, 0, 1]
-        x = np.array(x)
-        y = np.array(y)
-        print(x)
-        print(y)
-        fig, ax = plt.subplots()
-        ax.imshow(I, cmap="gray", origin="lower")
-        ax.set_title("Corner Detection for Basis Calculation")
-        if args.display:
-            plt.show()
-
-        k = 0
+        # Save the model
+        torch.save(trained_model.state_dict(), "curve_fitting_model.pth")
+        print("Model saved as curve_fitting_model.pth")
+        print("Model test loss: ", test_loss)
 
 
 if __name__ == "__main__":

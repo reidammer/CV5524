@@ -112,7 +112,7 @@ class CalibrationCurveDataGenerator:
 
     def generate_curve_function(self, x_range_mm, y_range_mm):
         """Generate a random curve function and its equation within the visible mm range."""
-        curve_types = ["linear", "quadratic", "cubic", "exponential", "sinusoidal"]
+        curve_types = ["linear"]
         curve_type = random.choice(curve_types)
 
         x_min_mm, x_max_mm = x_range_mm
