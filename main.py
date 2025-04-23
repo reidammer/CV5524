@@ -223,11 +223,15 @@ def train_model(model, train_loader, val_loader, num_epochs=25, use_curve_loss=T
 
     train_losses = []
     val_losses = []
+    train_accuracies = []
+    val_accuracies = []
 
     for epoch in range(num_epochs):
         # Training phase
         model.train()
         running_loss = 0.0
+        correct = 0
+        total = 0
 
         for images, labels in train_loader:
             images = images.to(device)
@@ -240,7 +244,8 @@ def train_model(model, train_loader, val_loader, num_epochs=25, use_curve_loss=T
 
             # calculate loss
             batch_loss = F.mse_loss(outputs, labels)
-
+            correct += torch.sum(torch.abs(outputs - labels) < 0.3).item()
+            total += labels.numel()
             batch_loss.backward()
             optimizer.step()
 
@@ -249,9 +254,15 @@ def train_model(model, train_loader, val_loader, num_epochs=25, use_curve_loss=T
         epoch_train_loss = running_loss / len(train_loader)
         train_losses.append(epoch_train_loss)
 
+        train_accuracy = (correct / total) * 100
+        train_accuracies.append(train_accuracy)
+        print(f"Epoch {epoch+1}/{num_epochs}, Train Loss: {epoch_train_loss:.4f}")
+        print(f"Train Accuracy: {train_accuracy:.2f}%")
+
         model.eval()
         running_val_loss = 0.0
-
+        val_correct = 0
+        val_total = 0
         # Validation, turn off gradients
         with torch.no_grad():
             for images, labels in val_loader:
@@ -264,16 +275,18 @@ def train_model(model, train_loader, val_loader, num_epochs=25, use_curve_loss=T
                 batch_loss = F.mse_loss(outputs, labels)
 
                 running_val_loss += batch_loss.item()
-
+                val_correct += torch.sum(torch.abs(outputs - labels) < 0.3).item()
+                val_total += labels.numel()
         epoch_val_loss = running_val_loss / len(val_loader)
         val_losses.append(epoch_val_loss)
-
+        val_accuracy = (val_correct / val_total) * 100
+        val_accuracies.append(val_accuracy)
         scheduler.step(epoch_val_loss)
 
         print(
-            f"Epoch {epoch+1}/{num_epochs}, "
-            f"Train Loss: {epoch_train_loss:.4f}, "
-            f"Val Loss: {epoch_val_loss:.4f}"
+            f"Epoch {epoch+1}/{num_epochs}, ",
+            f"Validation accuracy: {val_accuracy:.2f}%, ",
+            f"Val Loss: {epoch_val_loss:.4f}",
         )
 
     return model, train_losses, val_losses
@@ -286,7 +299,8 @@ def test_model(model, test_loader, use_curve_loss=True):
     model.eval()
 
     running_loss = 0.0
-
+    total_correct = 0
+    total_predictions = 0
     # Test model, turn off gradients
     with torch.no_grad():
         for images, labels in test_loader:
@@ -299,6 +313,10 @@ def test_model(model, test_loader, use_curve_loss=True):
             batch_loss = F.mse_loss(outputs, labels)
 
             running_loss += batch_loss.item()
+            total_correct += torch.sum(torch.abs(outputs - labels) < 0.3).item()
+            total_predictions += labels.numel()
+    test_accuracy = (total_correct / total_predictions) * 100
+    print(f"Test Accuracy: {test_accuracy:.2f}%")
 
     test_loss = running_loss / len(test_loader)
     print(f"Test Loss: {test_loss:.4f}")
