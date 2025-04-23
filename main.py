@@ -2,32 +2,18 @@ import argparse
 import json
 import os
 import os.path as osp
-from matplotlib import transforms
+from torchvision import transforms
 import numpy as np
 from PIL import Image, ImageOps
 import matplotlib.pyplot as plt
-import matplotlib.image as mpimg
-from mpl_toolkits.mplot3d import Axes3D
 import torch.optim as optim
-import matplotlib as mpl
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader, random_split
 import torchvision.models as models
 import torch.nn.functional as F
-from torch.nn import init
-from torch.nn import Parameter
-import json
-import numpy as np
-import os
-import random
-import time
-import math
 from pathlib import Path
 from torch.utils.data import Dataset
-from torchvision import transforms
-from PIL import Image
-import torch
 
 
 def calibration_loader(args):
@@ -185,6 +171,7 @@ class CurveDataset(Dataset):
                 transforms.ToTensor(),
             ]
         )
+        self.max_coefficients = 4  # Maximum number of coefficients for any curve
 
     def __len__(self):
         return len(self.metadata)
@@ -196,7 +183,47 @@ class CurveDataset(Dataset):
         image = self.transform(image)
 
         coeffs = item["coefficients"]
-        label = torch.tensor(list(coeffs.values()), dtype=torch.float32)
+        curve_type = item["equation_type"]
+        coeff_values = list(coeffs.values())
+        coeff_values = coeff_values + [0] * (self.max_coefficients - len(coeff_values))
+        label = torch.tensor(coeff_values[: self.max_coefficients], dtype=torch.float32)
+
+        return image, label, curve_type
+
+
+class CurveTypeDataset(Dataset):
+    def __init__(self, metadata, root_dir, transform=None):
+        self.root_dir = Path(root_dir)
+        self.metadata = metadata["curves"]
+        self.transform = transform or transforms.Compose(
+            [
+                transforms.Resize((224, 224)),
+                transforms.ToTensor(),
+            ]
+        )
+        self.curve_type_mapping = {
+            "linear": 0,
+            "quadratic": 1,
+            "cubic": 2,
+            "exponential": 3,
+            "sinusoidal": 4,
+        }
+
+    def __len__(self):
+        return len(self.metadata)
+
+    def __getitem__(self, idx):
+        item = self.metadata[idx]
+        image_path = self.root_dir / item["image_path"]
+        image = Image.open(image_path).convert("RGB")
+        image = self.transform(image)
+
+        curve_type = item["equation_type"]
+        label = self.curve_type_mapping[curve_type]  # Convert string to integer
+
+        label = torch.tensor(
+            label, dtype=torch.long
+        )  # Convert to tensor for classification
 
         return image, label
 
@@ -212,6 +239,176 @@ def Image_Remap(I, old_min, old_max, new_min, new_max):
     return I
 
 
+def train_curve_type_model(model, train_loader, val_loader, num_epochs=25):
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    print(f"Using device: {device}")
+
+    model = model.to(device)
+    optimizer = optim.Adam(model.parameters(), lr=0.0001)  # Lower initial learning rate
+    scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=num_epochs)
+    loss_function = nn.CrossEntropyLoss()
+    train_losses = []
+    val_losses = []
+    val_accuracies = []
+
+    for epoch in range(num_epochs):
+        # Training phase
+        model.train()
+        running_loss = 0.0
+        correct = 0
+        total = 0
+
+        for images, labels in train_loader:
+            images = images.to(device)
+            labels = labels.to(device)
+
+            optimizer.zero_grad()
+            outputs = model(images)
+            batch_loss = loss_function(outputs, labels)
+            batch_loss.backward()
+            optimizer.step()
+
+            running_loss += batch_loss.item()
+
+            _, predicted = torch.max(outputs.data, 1)
+            total += labels.size(0)
+            correct += (predicted == labels).sum().item()
+
+        epoch_train_loss = running_loss / len(train_loader)
+        train_accuracy = 100 * correct / total
+        train_losses.append(epoch_train_loss)
+
+        # Validation
+        model.eval()
+        running_val_loss = 0.0
+        val_correct = 0
+        val_total = 0
+
+        with torch.no_grad():
+            for images, labels in val_loader:
+                images = images.to(device)
+                labels = labels.to(device)
+
+                outputs = model(images)
+                batch_loss = F.cross_entropy(outputs, labels)
+
+                running_val_loss += batch_loss.item()
+
+                # Calculate validation accuracy
+                _, predicted = torch.max(outputs.data, 1)
+                val_total += labels.size(0)
+                val_correct += (predicted == labels).sum().item()
+
+        epoch_val_loss = running_val_loss / len(val_loader)
+        val_accuracy = 100 * val_correct / val_total
+        val_losses.append(epoch_val_loss)
+        val_accuracies.append(val_accuracy)
+
+        scheduler.step()
+
+        print(
+            f"Epoch {epoch+1}/{num_epochs}, "
+            f"Train Loss: {epoch_train_loss:.4f}, "
+            f"Train Acc: {train_accuracy:.2f}%, "
+            f"Val Loss: {epoch_val_loss:.4f}, "
+            f"Val Acc: {val_accuracy:.2f}%"
+        )
+
+    return model, train_losses, val_losses, val_accuracies
+
+
+def test_curve_type_model(model, test_loader):
+    """Evaluate the model on the test set"""
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    model = model.to(device)
+    model.eval()
+
+    running_loss = 0.0
+    correct = 0
+    total = 0
+
+    # Test model, turn off gradients
+    with torch.no_grad():
+        for images, labels in test_loader:
+            images = images.to(device)
+            labels = labels.to(device)
+
+            outputs = model(images)
+
+            # Cross-entropy loss for classification
+            batch_loss = F.cross_entropy(outputs, labels)
+
+            running_loss += batch_loss.item()
+
+            _, predicted = torch.max(outputs.data, 1)
+            total += labels.size(0)
+            correct += (predicted == labels).sum().item()
+
+    test_loss = running_loss / len(test_loader)
+    accuracy = 100 * correct / total
+    print(f"Test Loss: {test_loss:.4f}, Accuracy: {accuracy:.2f}%")
+
+    return test_loss, accuracy
+
+
+def visualize_curve_type_predictions(model, test_loader, num_examples=5):
+    """Visualize model predictions against ground truth for some test examples"""
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    model = model.to(device)
+    model.eval()
+
+    fig, axes = plt.subplots(num_examples, 1, figsize=(12, 4 * num_examples))
+
+    examples_seen = 0
+    curve_type_mapping = {
+        0: "linear",
+        1: "quadratic",
+        2: "cubic",
+        3: "exponential",
+        4: "sinusoidal",
+    }
+
+    # Test examples
+    with torch.no_grad():
+        for images, labels in test_loader:
+            if examples_seen >= num_examples:
+                break
+
+            images = images.to(device)
+            labels = labels.to(device)
+
+            outputs = model(images)
+            _, predicted = torch.max(outputs, 1)  # Get the predicted class
+
+            for i in range(min(len(images), num_examples - examples_seen)):
+                ax = axes[examples_seen] if num_examples > 1 else axes
+
+                # Get the actual and predicted curve types
+                actual_curve_type = curve_type_mapping[labels[i].item()]
+                predicted_curve_type = curve_type_mapping[predicted[i].item()]
+
+                # Show the input image
+                img = images[i].cpu().permute(1, 2, 0).numpy()
+                img = img * np.array([0.229, 0.224, 0.225]) + np.array(
+                    [0.485, 0.456, 0.406]
+                )  # De-normalize
+                img = np.clip(img, 0, 1)
+
+                ax.imshow(img)
+                ax.set_title(
+                    f"Actual: {actual_curve_type}, Predicted: {predicted_curve_type}",
+                    fontsize=12,
+                )
+                ax.axis("off")
+
+                examples_seen += 1
+                if examples_seen >= num_examples:
+                    break
+
+    plt.tight_layout()
+    plt.show()
+
+
 def train_model(model, train_loader, val_loader, num_epochs=25, use_curve_loss=True):
     """Train the model and monitor validation performance"""
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -223,20 +420,29 @@ def train_model(model, train_loader, val_loader, num_epochs=25, use_curve_loss=T
 
     train_losses = []
     val_losses = []
-
+    total_loss = 0.0
     for epoch in range(num_epochs):
         # Training phase
         model.train()
         running_loss = 0.0
 
-        for images, labels in train_loader:
+        for images, labels, curve_type in train_loader:
             images = images.to(device)
             labels = labels.to(device)
 
             optimizer.zero_grad()
-
-            # run images through model
             outputs = model(images)
+            # run images through model
+            if curve_type == "linear":
+                outputs = model(images, num_coefficients=2)
+            elif curve_type == "quadratic":
+                outputs = model(images, num_coefficients=3)
+            elif curve_type == "cubic":
+                outputs = model(images, num_coefficients=4)
+            elif curve_type == "exponential":
+                outputs = model(images, num_coefficients=3)
+            elif curve_type == "sinusoidal":
+                outputs = model(images, num_coefficients=4)
 
             # calculate loss
             batch_loss = F.mse_loss(outputs, labels)
@@ -248,6 +454,7 @@ def train_model(model, train_loader, val_loader, num_epochs=25, use_curve_loss=T
 
         epoch_train_loss = running_loss / len(train_loader)
         train_losses.append(epoch_train_loss)
+        total_loss += epoch_train_loss
 
         model.eval()
         running_val_loss = 0.0
@@ -274,12 +481,12 @@ def train_model(model, train_loader, val_loader, num_epochs=25, use_curve_loss=T
             f"Epoch {epoch+1}/{num_epochs}, "
             f"Train Loss: {epoch_train_loss:.4f}, "
             f"Val Loss: {epoch_val_loss:.4f}"
+            f"Total Loss: {total_loss:.4f}"
         )
-
     return model, train_losses, val_losses
 
 
-def test_model(model, test_loader, use_curve_loss=True):
+def test_model(model, curve_model, test_loader, use_curve_loss=True):
     """Evaluate the model on the test set"""
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model = model.to(device)
@@ -292,6 +499,18 @@ def test_model(model, test_loader, use_curve_loss=True):
         for images, labels in test_loader:
             images = images.to(device)
             labels = labels.to(device)
+            curve_type = curve_model(images)
+            outputs = curve_model(images)
+            if curve_type == 0:
+                outputs = model(images, num_coefficients=2)
+            elif curve_type == 1:
+                outputs = model(images, num_coefficients=3)
+            elif curve_type == 2:
+                outputs = model(images, num_coefficients=4)
+            elif curve_type == 3:
+                outputs = model(images, num_coefficients=3)
+            elif curve_type == 4:
+                outputs = model(images, num_coefficients=4)
 
             outputs = model(images)
 
@@ -364,15 +583,32 @@ class CurveCoefficientCNN(nn.Module):
     def __init__(self, num_coefficients=2):
         super(CurveCoefficientCNN, self).__init__()
 
-        # Use a pre-trained CNN as the backbone
-        self.backbone = models.resnet18(pretrained=True)
+        # resnet 18
+        self.pretrained = models.resnet18(pretrained=True)
 
-        # Replace the final FC layer with one for coefficient regression
-        in_features = self.backbone.fc.in_features
-        self.backbone.fc = nn.Linear(in_features, num_coefficients)
+        in_features = self.pretrained.fc.in_features
+        self.pretrained.fc = nn.Linear(in_features, num_coefficients)
 
     def forward(self, x):
-        return self.backbone(x)
+        return self.pretrained(x)
+
+
+class CurveTypeCNN(nn.Module):
+    def __init__(self, num_classes=5):
+        super(CurveTypeCNN, self).__init__()
+        # Use a pre-trained model
+        self.pretrained = models.resnet18(pretrained=True)
+
+        in_features = self.pretrained.fc.in_features
+        self.pretrained.fc = nn.Linear(in_features, int(in_features / 2))
+        self.fc = nn.Linear(int(in_features / 2), num_classes)
+        self.relu = nn.ReLU()
+
+    def forward(self, x):
+        x = self.pretrained(x)
+        x = self.relu(x)
+        x = self.fc(x)
+        return x
 
 
 def generate_curve(x, coeffs):
@@ -515,10 +751,41 @@ def main(args):
     val_loader = DataLoader(val_dataset, batch_size=32, shuffle=False)
     test_loader = DataLoader(test_dataset, batch_size=32, shuffle=False)
 
+    curve_type_dataset = CurveTypeDataset(metadata, "./curve_projection_dataset")
+    # Split dataset 70 15 15
+    train_curve_size = int(0.7 * len(curve_type_dataset))
+    val_curve_size = int(0.15 * len(curve_type_dataset))
+    test_curve_size = len(curve_type_dataset) - train_size - val_size
+    train_curve_dataset, val_curve_dataset, test_curve_dataset = random_split(
+        curve_type_dataset,
+        [train_curve_size, val_curve_size, test_curve_size],
+        generator=torch.Generator().manual_seed(42),
+    )
+
+    # Create data loaders
+    train_curve_loader = DataLoader(train_curve_dataset, batch_size=32, shuffle=True)
+    val_curve_loader = DataLoader(val_curve_dataset, batch_size=32, shuffle=False)
+    test_curve_loader = DataLoader(test_curve_dataset, batch_size=32, shuffle=False)
+
     if int(args.current_step) >= 3 or int(args.current_step) == 0:
         # Initialize model
         model = CurveCoefficientCNN(num_coefficients=2)
+        model_type = CurveTypeCNN()
 
+        # Train curve type model
+        trained_model_type, train_curve_losses, val_curve_losses, accuracy_curve = (
+            train_curve_type_model(
+                model_type, train_curve_loader, val_curve_loader, num_epochs=20
+            )
+        )
+        test_curve_type_loss = test_curve_type_model(
+            trained_model_type, test_curve_loader
+        )
+
+        # Visualize curve type predictions
+        visualize_curve_type_predictions(
+            trained_model_type, test_curve_loader, num_examples=5
+        )
         # Train model
         trained_model, train_losses, val_losses = train_model(
             model, train_loader, val_loader, num_epochs=20, use_curve_loss=True
@@ -535,7 +802,9 @@ def main(args):
         plt.show()
 
         # Test model
-        test_loss = test_model(trained_model, test_loader, use_curve_loss=True)
+        test_loss = test_model(
+            trained_model, trained_model_type, test_loader, use_curve_loss=True
+        )
 
         # Visualize results
         visualize_predictions(trained_model, test_loader, num_examples=5)
