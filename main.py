@@ -171,7 +171,7 @@ class CurveDataset(Dataset):
                 transforms.ToTensor(),
             ]
         )
-        self.max_coefficients = 4  # Maximum number of coefficients for any curve
+        self.max_coefficients = 4
 
     def __len__(self):
         return len(self.metadata)
@@ -387,14 +387,6 @@ def visualize_curve_type_predictions(model, test_loader, num_examples=5):
                 actual_curve_type = curve_type_mapping[labels[i].item()]
                 predicted_curve_type = curve_type_mapping[predicted[i].item()]
 
-                # Show the input image
-                img = images[i].cpu().permute(1, 2, 0).numpy()
-                img = img * np.array([0.229, 0.224, 0.225]) + np.array(
-                    [0.485, 0.456, 0.406]
-                )  # De-normalize
-                img = np.clip(img, 0, 1)
-
-                ax.imshow(img)
                 ax.set_title(
                     f"Actual: {actual_curve_type}, Predicted: {predicted_curve_type}",
                     fontsize=12,
