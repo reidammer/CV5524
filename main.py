@@ -514,7 +514,6 @@ def main(args):
             plt.show()
 
     ## Curve fitting
-    ## THIS IS WHERE NEURAL NETWORK WOULD BE
 
     with open("./curve_projection_dataset/metadata.json", "r") as f:
         metadata = json.load(f)
@@ -574,10 +573,10 @@ def main(args):
         else:
             if int(args.current_step) >= 3 or int(args.current_step) == 0:
                 # Add names of any more lines to fit.
-                linear_lines = ['line1', 'line2, test_case_1, test_case_2']
+                linear_lines = ['line1', 'line2', 'test_case_1', 'test_case_2']
                 quadratic_lines = ['quadratic', 'exponential']
                 cubic_lines = ['cubic']
-                sin_lines = ['sinusoidal']
+                sin_lines = ['sinusoidal', 'test_case_3']
                 x = None
                 y = None
                 curve = curve_loader(args)
