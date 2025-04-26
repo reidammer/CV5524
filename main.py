@@ -614,14 +614,9 @@ def main(args):
                 y = p[0] * x**3 + p[1] * x**2 + p[2]*x + p[3]
 
             elif args.curve.lower() in sin_lines:
-                amp = (np.max(b) - np.min(b)) / 2
-                per = x_data[-1] - x_data[0]
-                initial = [amp,per,0,0]
-
-                fit, cov = curve_fit(sinusoidal, x_data, b, initial)
+                p = np.polyfit(x_data, b, 7)
                 x = np.linspace(0, curve.shape[1], curve.shape[1])
-                y = sinusoidal(x, fit[0], fit[1], fit[2], fit[3])
-
+                y = p[0] * x**7 + p[1] * x**6 + p[2] * x**5 + p[3] * x**4 + p[4] * x**3 + p[5] * x**2 + p[6] * x + p[7]
 
             fig, ax = plt.subplots()
             plt.plot(x, y)
