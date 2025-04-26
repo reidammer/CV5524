@@ -28,6 +28,7 @@ from torch.utils.data import Dataset
 from torchvision import transforms
 from PIL import Image
 import torch
+from scipy.optimize import curve_fit
 
 
 def calibration_loader(args):
@@ -396,6 +397,9 @@ class CurveCoefficientCNN(nn.Module):
 def generate_curve(x, coeffs):
     return x * coeffs[0] + coeffs[1]  # Example for linear curve
 
+def sinusoidal(x, A, B, C, D):
+    return A * np.sin(B*x + C) + D
+
 
 def main(args):
 
@@ -511,6 +515,7 @@ def main(args):
 
     ## Curve fitting
     ## THIS IS WHERE NEURAL NETWORK WOULD BE
+
     with open("./curve_projection_dataset/metadata.json", "r") as f:
         metadata = json.load(f)
 
@@ -527,41 +532,96 @@ def main(args):
         [train_size, val_size, test_size],
         generator=torch.Generator().manual_seed(42),
     )
+    if args.approach.lower() == 'advanced':
 
-    # Create data loaders
-    train_loader = DataLoader(train_dataset, batch_size=32, shuffle=True)
-    val_loader = DataLoader(val_dataset, batch_size=32, shuffle=False)
-    test_loader = DataLoader(test_dataset, batch_size=32, shuffle=False)
+        print('Using Advanced Approach')
 
-    if int(args.current_step) >= 3 or int(args.current_step) == 0:
-        # Initialize model
-        model = CurveCoefficientCNN(num_coefficients=2)
+        # Create data loaders
+        train_loader = DataLoader(train_dataset, batch_size=32, shuffle=True)
+        val_loader = DataLoader(val_dataset, batch_size=32, shuffle=False)
+        test_loader = DataLoader(test_dataset, batch_size=32, shuffle=False)
 
-        # Train model
-        trained_model, train_losses, val_losses = train_model(
-            model, train_loader, val_loader, num_epochs=20, use_curve_loss=True
-        )
+        if int(args.current_step) >= 3 or int(args.current_step) == 0:
+            # Initialize model
+            model = CurveCoefficientCNN(num_coefficients=2)
 
-        # Plot training and validation loss curves
-        plt.figure(figsize=(10, 6))
-        plt.plot(train_losses, label="Training Loss")
-        plt.plot(val_losses, label="Validation Loss")
-        plt.xlabel("Epoch")
-        plt.ylabel("Loss")
-        plt.title("Training and Validation Loss")
-        plt.legend()
-        plt.show()
+            # Train model
+            trained_model, train_losses, val_losses = train_model(
+                model, train_loader, val_loader, num_epochs=20, use_curve_loss=True
+            )
 
-        # Test model
-        test_loss = test_model(trained_model, test_loader, use_curve_loss=True)
+            # Plot training and validation loss curves
+            plt.figure(figsize=(10, 6))
+            plt.plot(train_losses, label="Training Loss")
+            plt.plot(val_losses, label="Validation Loss")
+            plt.xlabel("Epoch")
+            plt.ylabel("Loss")
+            plt.title("Training and Validation Loss")
+            plt.legend()
+            plt.show()
 
-        # Visualize results
-        visualize_predictions(trained_model, test_loader, num_examples=5)
+            # Test model
+            test_loss = test_model(trained_model, test_loader, use_curve_loss=True)
 
-        # Save the model
-        torch.save(trained_model.state_dict(), "curve_fitting_model.pth")
-        print("Model saved as curve_fitting_model.pth")
-        print("Model test loss: ", test_loss)
+            # Visualize results
+            visualize_predictions(trained_model, test_loader, num_examples=5)
+
+            # Save the model
+            torch.save(trained_model.state_dict(), "curve_fitting_model.pth")
+            print("Model saved as curve_fitting_model.pth")
+            print("Model test loss: ", test_loss)
+
+        else:
+            if int(args.current_step) >= 3 or int(args.current_step) == 0:
+                # Add names of any more lines to fit.
+                linear_lines = ['line1', 'line2, test_case_1, test_case_2']
+                quadratic_lines = ['quadratic', 'exponential']
+                cubic_lines = ['cubic']
+                sin_lines = ['sinusoidal']
+                x = None
+                y = None
+                curve = curve_loader(args)
+                # linear least squares regression
+                A = []
+                b = []
+                for i in range(curve.shape[0]):
+                    for j in range(curve.shape[1]):
+                        if curve[i, j, 1] == 0:
+                            A.append([j, 1])
+                            b.append(i)
+                A = np.array(A)
+                b = np.array(b)
+
+                if args.curve.lower() in linear_lines:
+                    alpha = np.linalg.lstsq(A, b, rcond=None)[0]
+                    print(alpha)
+                    x = np.linspace(0, curve.shape[1], curve.shape[1])
+                    y = alpha[0] * x + alpha[1]
+
+                elif args.curve.lower() in quadratic_lines:
+                    p = np.polyfit(A, b, 2)
+                    x = np.linspace(0, curve.shape[1], curve.shape[1])
+                    y = p[0] * x**2 + p[1] * x + p[2]
+
+                elif args.curve.lower() in cubic_lines:
+                    p = np.polyfit(A, b, 2)
+                    x = np.linspace(0, curve.shape[1], curve.shape[1])
+                    y = p[0] * x**3 + p[1] * x**2 + p[2]*x + p[3]
+
+                elif args.curve.lower() in sin_lines:
+                    initial = [1,1,0,0]
+
+                    fit_A, fit_B, fit_C, fit_D, cov = curve_fit(sinusoidal, A, b, initial)
+                    x = np.linspace(0, curve.shape[1], curve.shape[1])
+                    y = sinusoidal(x, fit_A, fit_B, fit_C, fit_D)
+
+
+                fig, ax = plt.subplots()
+                plt.plot(x, y)
+                ax.imshow(curve, cmap='gray', origin='lower')
+                ax.set_title('Calculated Curve Fit Over Captured Curve')
+                if args.display:
+                    plt.show()
 
 
 if __name__ == "__main__":
@@ -575,5 +635,6 @@ if __name__ == "__main__":
     parser.add_argument("--display", action="store_true", default=False)
     parser.add_argument("--save", action="store_true", default=False)
     parser.add_argument("--current_step", default=1, type=int)
+    parser.add_argument("--approach", default = "advanced", type = str)
     args = parser.parse_args()
     main(args)
