@@ -604,12 +604,12 @@ def main(args):
                 y = alpha[0] * x + alpha[1]
 
             elif args.curve.lower() in quadratic_lines:
-                p = np.polyfit(A, b, 2)
+                p = np.polyfit(x_data, b, 2)
                 x = np.linspace(0, curve.shape[1], curve.shape[1])
                 y = p[0] * x**2 + p[1] * x + p[2]
 
             elif args.curve.lower() in cubic_lines:
-                p = np.polyfit(A, b, 2)
+                p = np.polyfit(x_data, b, 3)
                 x = np.linspace(0, curve.shape[1], curve.shape[1])
                 y = p[0] * x**3 + p[1] * x**2 + p[2]*x + p[3]
 
