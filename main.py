@@ -49,6 +49,8 @@ def calibration_loader(args):
         "base5",
         "test_case_2",
         "test_case_1",
+        "test_case_3",
+        "test_case_4",
         "lighthouse",
     ]:
         print("Using " + args.calibration + " photo")
@@ -79,7 +81,8 @@ def curve_loader(args):
             The third dimension is color channels, from Red to Green to Blue.
     """
 
-    if args.curve in ["line1", "line2", "line3", "test_case_2", "test_case_1"]:
+    if args.curve in ["line1", "line2", "line3", "test_case_2", "test_case_1","cubic",
+                      "exponential","quadratic","exponential","test_case_3","sinusoidal"]:
         print("Using " + args.curve + " photo")
         current_dir = os.getcwd()
         image_path = osp.join(current_dir, "Curves", args.curve + ".png")
@@ -531,6 +534,7 @@ def main(args):
         [train_size, val_size, test_size],
         generator=torch.Generator().manual_seed(42),
     )
+    curve = curve_loader(args)
     if args.approach.lower() == 'advanced':
 
         print('Using Advanced Approach')
@@ -570,57 +574,61 @@ def main(args):
             print("Model saved as curve_fitting_model.pth")
             print("Model test loss: ", test_loss)
 
-        else:
-            if int(args.current_step) >= 3 or int(args.current_step) == 0:
-                # Add names of any more lines to fit.
-                linear_lines = ['line1', 'line2', 'test_case_1', 'test_case_2']
-                quadratic_lines = ['quadratic', 'exponential']
-                cubic_lines = ['cubic']
-                sin_lines = ['sinusoidal', 'test_case_3']
-                x = None
-                y = None
-                curve = curve_loader(args)
-                # linear least squares regression
-                A = []
-                b = []
-                for i in range(curve.shape[0]):
-                    for j in range(curve.shape[1]):
-                        if curve[i, j, 1] == 0:
-                            A.append([j, 1])
-                            b.append(i)
-                A = np.array(A)
-                b = np.array(b)
+    else:
+        if int(args.current_step) >= 3 or int(args.current_step) == 0:
+            # Add names of any more lines to fit.
+            linear_lines = ['line1', 'line2', 'test_case_1', 'test_case_2']
+            quadratic_lines = ['quadratic', 'exponential']
+            cubic_lines = ['cubic']
+            sin_lines = ['sinusoidal', 'test_case_3']
+            x = None
+            y = None
+            # linear least squares regression
+            A = []
+            b = []
+            x_data = []
+            for i in range(curve.shape[0]):
+                for j in range(curve.shape[1]):
+                    if curve[i, j, 1] == 0:
+                        A.append([j, 1])
+                        x_data.append(j)
+                        b.append(i)
+            A = np.array(A)
+            b = np.array(b)
+            x_data = np.array(x_data)
 
-                if args.curve.lower() in linear_lines:
-                    alpha = np.linalg.lstsq(A, b, rcond=None)[0]
-                    print(alpha)
-                    x = np.linspace(0, curve.shape[1], curve.shape[1])
-                    y = alpha[0] * x + alpha[1]
+            if args.curve.lower() in linear_lines:
+                alpha = np.linalg.lstsq(A, b, rcond=None)[0]
+                print(alpha)
+                x = np.linspace(0, curve.shape[1], curve.shape[1])
+                y = alpha[0] * x + alpha[1]
 
-                elif args.curve.lower() in quadratic_lines:
-                    p = np.polyfit(A, b, 2)
-                    x = np.linspace(0, curve.shape[1], curve.shape[1])
-                    y = p[0] * x**2 + p[1] * x + p[2]
+            elif args.curve.lower() in quadratic_lines:
+                p = np.polyfit(A, b, 2)
+                x = np.linspace(0, curve.shape[1], curve.shape[1])
+                y = p[0] * x**2 + p[1] * x + p[2]
 
-                elif args.curve.lower() in cubic_lines:
-                    p = np.polyfit(A, b, 2)
-                    x = np.linspace(0, curve.shape[1], curve.shape[1])
-                    y = p[0] * x**3 + p[1] * x**2 + p[2]*x + p[3]
+            elif args.curve.lower() in cubic_lines:
+                p = np.polyfit(A, b, 2)
+                x = np.linspace(0, curve.shape[1], curve.shape[1])
+                y = p[0] * x**3 + p[1] * x**2 + p[2]*x + p[3]
 
-                elif args.curve.lower() in sin_lines:
-                    initial = [1,1,0,0]
+            elif args.curve.lower() in sin_lines:
+                amp = (np.max(b) - np.min(b)) / 2
+                per = x_data[-1] - x_data[0]
+                initial = [amp,per,0,0]
 
-                    fit_A, fit_B, fit_C, fit_D, cov = curve_fit(sinusoidal, A, b, initial)
-                    x = np.linspace(0, curve.shape[1], curve.shape[1])
-                    y = sinusoidal(x, fit_A, fit_B, fit_C, fit_D)
+                fit, cov = curve_fit(sinusoidal, x_data, b, initial)
+                x = np.linspace(0, curve.shape[1], curve.shape[1])
+                y = sinusoidal(x, fit[0], fit[1], fit[2], fit[3])
 
 
-                fig, ax = plt.subplots()
-                plt.plot(x, y)
-                ax.imshow(curve, cmap='gray', origin='lower')
-                ax.set_title('Calculated Curve Fit Over Captured Curve')
-                if args.display:
-                    plt.show()
+            fig, ax = plt.subplots()
+            plt.plot(x, y)
+            ax.imshow(curve, cmap='gray', origin='lower')
+            ax.set_title('Calculated Curve Fit Over Captured Curve')
+            if args.display:
+                plt.show()
 
     ## Projection
     if int(args.current_step) >= 4:
