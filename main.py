@@ -622,6 +622,26 @@ def main(args):
                 if args.display:
                     plt.show()
 
+    ## Projection
+    if int(args.current_step) >= 4:
+        x = []
+        y = []
+        for i in range(curve.shape[0]):
+            for j in range(curve.shape[1]):
+                if curve[i, j, 1] == 0:
+                    x.append((i - xo) * 10 / xdist)
+                    y.append((j - yo) * 10 / ydist)
+                    I[i, j] = [1, 0, 1]
+        x = np.array(x)
+        y = np.array(y)
+        print(x)
+        print(y)
+        fig, ax = plt.subplots()
+        ax.imshow(I, cmap='gray', origin='lower')
+        ax.set_title('Corner Detection for Basis Calculation')
+        if args.display:
+            plt.show()
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Convolution_and_Fourier_and_Filter")
