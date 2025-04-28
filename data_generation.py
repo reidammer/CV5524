@@ -307,4 +307,4 @@ class CalibrationCurveDataGenerator:
 # Usage example
 if __name__ == "__main__":
     generator = CalibrationCurveDataGenerator(output_dir="./curve_projection_dataset")
-    generator.generate_dataset(num_curves=750)  # Generate 50 curve samples
+    generator.generate_dataset(num_curves=5000)  # Generate 50 curve samples
